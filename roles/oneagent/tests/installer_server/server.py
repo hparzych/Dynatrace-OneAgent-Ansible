@@ -1,7 +1,7 @@
-import argparse
 import logging
 from http import HTTPStatus
 from typing import Any
+from threading import Event
 
 from constants import (
     INSTALLER_CERTIFICATE_FILE_NAME,
@@ -54,29 +54,20 @@ def get_agent_in_version(system, version) -> TransferResult:
     return get_installer(system, request.args["arch"], version)
 
 
-def main() -> None:
+def run_server(ip_address: str, port: int, log_file_path: str, stop_event: Event) -> None:
     logging.basicConfig(
         format="%(asctime)s [server] %(levelname)s: %(message)s",
         datefmt="%H:%M:%S",
         level=logging.INFO,
+        handlers=[logging.FileHandler(log_file_path), logging.StreamHandler()],
     )
-
-    parser = argparse.ArgumentParser(description="Run Flask server.")
-    parser.add_argument(
-        "--ip-address",
-        type=str,
-        dest="ip_address",
-        help="IP address of the host to run the server on",
-    )
-    parser.add_argument("--port", type=int, help="Port to run the server on")
-    args = parser.parse_args()
 
     generator = SSLCertificateGenerator(
         country_name="US",
         state_name="California",
         locality_name="San Francisco",
         organization_name="Dynatrace",
-        common_name=args.ip_address,
+        common_name=ip_address,
     )
     generator.generate_and_save(
         f"{WORK_SERVER_DIR_PATH / SERVER_PRIVATE_KEY_FILE_NAME}",
@@ -89,4 +80,12 @@ def main() -> None:
     )
     app.register_blueprint(installer_bp, url_prefix="/api/v1/deployment/installer/agent")
     app.register_blueprint(certificate_bp)
-    app.run(host="0.0.0.0", debug=True, ssl_context=context, port=args.port)
+
+    app.run(host="0.0.0.0", port=port, ssl_context=context, use_reloader=False)
+
+    _ = stop_event.wait()
+
+    logging.info("Stopping server...")
+    func = request.environ.get("werkzeug.server.shutdown")
+    if func:
+        func()
